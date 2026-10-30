@@ -1,0 +1,3 @@
+import {app,HttpRequest,HttpResponseInit,InvocationContext} from '@azure/functions'; import {route} from '../agents/router.js'; import {propose} from '../services/propose.js';
+async function handler(req:HttpRequest,ctx:InvocationContext):Promise<HttpResponseInit>{try{const body=await req.json() as {message?:string}; if(!body.message?.trim()) return {status:400,jsonBody:{error:'message is required'}}; const proxy=route(body.message); const action=propose(proxy,body.message); ctx.log(`Created proposed action ${action.id}`); return {status:201,jsonBody:action};}catch{return {status:400,jsonBody:{error:'invalid JSON'}};}}
+app.http('proxy',{methods:['POST'],authLevel:'anonymous',route:'proxy',handler});

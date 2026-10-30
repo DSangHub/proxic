@@ -1,0 +1,2 @@
+import {randomUUID} from 'node:crypto'; import {approvalRequired,riskFor} from '@proxic/security'; import type {ProposedAction,ProxyType} from '@proxic/types';
+export function propose(proxy:ProxyType,message:string):ProposedAction {const risk=riskFor(proxy,message); return {id:randomUUID(),proxy,action:`${proxy}.propose`,description:message,riskLevel:risk,requiresApproval:approvalRequired(risk),status:approvalRequired(risk)?'awaiting_approval':'proposed',payload:{originalRequest:message},createdAt:new Date().toISOString()};}

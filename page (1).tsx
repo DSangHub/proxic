@@ -1,0 +1,2 @@
+const items=[['Bill Proxy','Organize bill-related tasks and prepare actions for approval.'],['Appointment Proxy','Turn scheduling requests into proposed calendar actions.'],['Task Proxy','Capture reminders, deadlines and everyday admin tasks.']];
+export default function Dashboard(){return <main><h1>Your Proxies</h1><p className="muted">Start with three narrow agents and one shared approval layer.</p><div className="grid">{items.map(([n,d])=><div className="card" key={n}><h2>{n}</h2><p>{d}</p></div>)}</div></main>}

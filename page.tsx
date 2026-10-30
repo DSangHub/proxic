@@ -1,0 +1,1 @@
+export default function Approvals(){return <main><h1>Approvals</h1><div className="card"><h2>No sensitive action executes directly from AI output.</h2><p className="muted">Actions that require consent should appear here before any external tool is called.</p></div></main>}
