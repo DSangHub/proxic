@@ -1,0 +1,1 @@
+{"name":"@proxic/functions","private":true,"type":"module","main":"dist/src/{index.js,functions/*.js}","scripts":{"build":"tsc","dev":"pnpm build && func start","typecheck":"tsc --noEmit"},"dependencies":{"@azure/functions":"^4.6.0","@proxic/security":"workspace:*","@proxic/types":"workspace:*"},"devDependencies":{"@types/node":"^22.20.5","typescript":"^5.7.0"}}
