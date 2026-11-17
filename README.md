@@ -29,6 +29,11 @@ Bill routes require the same bearer token: `GET /api/bills`, `GET /api/bills/{id
 
 Run backend tests with `pnpm --filter @proxic/functions test`. For the PostgreSQL integration test, migrate an isolated test database and set `TEST_DATABASE_URL` when running the tests; without it the integration test is skipped.
 
+## Plaid Sandbox
+The API supports one Plaid Sandbox connection per Firebase user. `POST /api/plaid/link-token` returns `linkToken` and `expiration` for Plaid Link. After Link succeeds, send `{"publicToken":"..."}` to `POST /api/plaid/exchange-token`. Authenticated `GET /api/plaid/accounts` returns cached account data; `GET /api/plaid/balance` retrieves live Sandbox balances. `DELETE /api/plaid/connection` removes the Item at Plaid and deletes its local record. Send the Firebase ID token as a bearer token to every endpoint. No frontend Plaid Link UI or payment functionality is included.
+
+Each user can have one pending or active connection. A pending Link session can be canceled with `DELETE /api/plaid/connection`; call it before starting a replacement or after Link expires. Link tokens and access tokens are encrypted at rest and never logged; access tokens are never returned to the browser. Plaid's Transactions product is initialized to enable account/balance access, but transaction history is not fetched. See [deployment notes](docs/deployment.md) for setup and failure recovery.
+
 ## Vercel
 Import the Git repository and set the Vercel project's Root Directory to `apps/web`. Add `NEXT_PUBLIC_API_URL` pointing to the deployed Azure Function App.
 

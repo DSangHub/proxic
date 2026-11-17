@@ -16,5 +16,12 @@ Build a Linux deployment artifact from the workspace root with `pnpm build` foll
 
 The duplicate fingerprint compares normalized merchant, amount, currency, due date, and last four within an owner. Matching submissions return 409 and require manual review; similar legitimate bills can match. Creation, detail review, approval, and rejection are audited transactionally. Future payment-state transitions must likewise write `bill.payment_state_changed` in the same transaction, but no such transition or payment execution is implemented.
 
+## Plaid Sandbox
+Set server-only `PLAID_ENV=sandbox`, `PLAID_CLIENT_ID`, `PLAID_SECRET`, and `PLAID_TOKEN_ENCRYPTION_KEY` in Azure settings/Key Vault and local Functions `Values`. Use Sandbox credentials only. Generate a unique 32-byte key with `openssl rand -hex 32`, store it securely and back it up separately from the database. AES-256-GCM encrypts tokens with the Firebase UID as authenticated data. Never expose these settings to Vercel or `NEXT_PUBLIC_*`; do not rotate or lose the key without first migrating or removing all existing connections, since stored tokens cannot otherwise be recovered. Apply the new database migration before deploying.
+
+The client always connects to Plaid's Sandbox host and rejects non-Sandbox tokens and a non-Sandbox `PLAID_ENV`. Each Link exchange checks the returned public token against that user's server-stored Link session. Sandbox Link requires an initialized product; this integration requests Transactions solely to enable account and balance access. Configure your Vercel origin in Azure CORS, including the `DELETE` method.
+
+If a disconnect fails, retry the same endpoint; a `DISCONNECTING` connection remains inaccessible until Plaid confirms removal (or reports the Sandbox token is invalid). Do not change Plaid client credentials while connections exist. If an exchange has an ambiguous failure or the server crashes during exchange, the connection can remain `EXCHANGING`: do not blindly retry the one-time token or delete the row. Contact an operator to reconcile and remove the Item in the Plaid Sandbox dashboard, then remove the affected record. No financial transactions are performed.
+
 ## GitHub
 CI builds and type-checks the monorepo. Add a separate Azure deployment workflow only after creating the Function App and configuring GitHub/Azure deployment credentials.

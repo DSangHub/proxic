@@ -73,6 +73,21 @@ model ForwardingAlias {
   revokedAt DateTime?
 }
 
+model PlaidConnection {
+  ownerUid       String               @id
+  status         PlaidConnectionState @default(LINKING)
+  encryptedToken String
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+}
+
+enum PlaidConnectionState {
+  LINKING
+  EXCHANGING
+  ACTIVE
+  DISCONNECTING
+}
+
 model Approval {
   id             String    @id @default(uuid())
   taskId         String?

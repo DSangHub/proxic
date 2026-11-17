@@ -1,0 +1,237 @@
+import { strict as assert } from 'node:assert';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { test } from 'node:test';
+import { HttpRequest, InvocationContext } from '@azure/functions';
+import { PrismaClient, type PlaidConnectionState } from '@prisma/client';
+import type { DecodedIdToken } from 'firebase-admin/auth';
+import type { Plaid } from 'plaid';
+import { createPlaidHandlers } from '../src/functions/plaid.js';
+import { decryptPlaidToken, encryptPlaidToken } from '../src/services/plaid-crypto.js';
+import { PlaidConflictError, PlaidService, PrismaConnectionStore, SandboxPlaidGateway, type ConnectionStore, type PlaidGateway } from '../src/services/plaid.js';
+
+process.env.PLAID_TOKEN_ENCRYPTION_KEY = randomBytes(32).toString('hex');
+const context = new InvocationContext();
+const user = (uid: string): DecodedIdToken => ({
+  uid, sub: uid, aud: 'project', iss: 'issuer', auth_time: 1, iat: 1, exp: 9999999999,
+  firebase: { identities: {}, sign_in_provider: 'test' },
+});
+const verify = async (token: string) => user(token);
+const request = (method: string, token?: string, body?: unknown) => new HttpRequest({
+  method, url: 'http://localhost/api/plaid', headers: token ? { authorization: `Bearer ${token}` } : {},
+  ...(body === undefined ? {} : { body: { string: JSON.stringify(body) } }),
+});
+
+class MemoryStore implements ConnectionStore {
+  rows = new Map<string, { status: PlaidConnectionState; encryptedToken: string }>();
+  async get(ownerUid: string) { return this.rows.get(ownerUid) ?? null; }
+  async create(ownerUid: string, encryptedToken: string) {
+    if (this.rows.has(ownerUid)) throw new PlaidConflictError('Already connected');
+    this.rows.set(ownerUid, { status: 'LINKING', encryptedToken });
+  }
+  async transition(ownerUid: string, from: PlaidConnectionState, to: PlaidConnectionState, expected: string, encryptedToken?: string) {
+    const row = this.rows.get(ownerUid);
+    if (!row || row.status !== from || row.encryptedToken !== expected) return false;
+    this.rows.set(ownerUid, { status: to, encryptedToken: encryptedToken ?? row.encryptedToken });
+    return true;
+  }
+  async delete(ownerUid: string, status: PlaidConnectionState, expected: string) {
+    const row = this.rows.get(ownerUid);
+    if (!row || row.status !== status || row.encryptedToken !== expected) return false;
+    return this.rows.delete(ownerUid);
+  }
+}
+
+class FakeGateway implements PlaidGateway {
+  removed: string[] = [];
+  used: { token: string; live: boolean }[] = [];
+  shouldFailRemove = false;
+  async createLink(ownerUid: string) { return { linkToken: `link-sandbox-${ownerUid}`, expiration: '2027-01-01T00:00:00Z' }; }
+  async publicTokenBelongsToLink(linkToken: string, publicToken: string) { return publicToken === linkToken.replace('link-', 'public-'); }
+  async exchange(publicToken: string) { return { accessToken: publicToken.replace('public-', 'access-') }; }
+  async accounts(accessToken: string, liveBalance: boolean): Promise<Plaid.AccountBase[]> {
+    this.used.push({ token: accessToken, live: liveBalance });
+    return [{
+      account_id: 'account', name: 'Checking', mask: '1234', official_name: null, type: 'depository', subtype: 'checking',
+      balances: { available: 2, current: 3, limit: null, iso_currency_code: 'USD', unofficial_currency_code: null },
+    }];
+  }
+  async remove(accessToken: string) {
+    if (this.shouldFailRemove) throw new Error('upstream failure');
+    this.removed.push(accessToken);
+  }
+}
+
+test('encryption authenticates token and owner and rejects invalid key configuration', () => {
+  const ciphertext = encryptPlaidToken('access-sandbox-secret', 'alice');
+  assert.ok(!ciphertext.includes('access-sandbox-secret'));
+  assert.equal(decryptPlaidToken(ciphertext, 'alice'), 'access-sandbox-secret');
+  assert.throws(() => decryptPlaidToken(ciphertext, 'bob'));
+  const parts = ciphertext.split('.');
+  parts[2] = Buffer.alloc(16).toString('base64url');
+  assert.throws(() => decryptPlaidToken(parts.join('.'), 'alice'));
+  const key = process.env.PLAID_TOKEN_ENCRYPTION_KEY;
+  process.env.PLAID_TOKEN_ENCRYPTION_KEY = 'short';
+  assert.throws(() => encryptPlaidToken('secret', 'alice'));
+  process.env.PLAID_TOKEN_ENCRYPTION_KEY = key;
+});
+
+test('all endpoints authenticate before using Plaid or a store', async () => {
+  const handlers = createPlaidHandlers();
+  for (const handler of Object.values(handlers)) {
+    const response = await handler(request('GET'), context);
+    assert.equal(response.status, 401);
+    assert.equal(new Headers(response.headers).get('Cache-Control'), 'no-store');
+  }
+});
+
+test('link, exchange, account access and disconnect are scoped to the verified user', async () => {
+  const store = new MemoryStore();
+  const gateway = new FakeGateway();
+  const handlers = createPlaidHandlers({ verify, service: new PlaidService(store, gateway) });
+  const link = await handlers.link(request('POST', 'alice'), context);
+  assert.deepEqual(link.jsonBody, { linkToken: 'link-sandbox-alice', expiration: '2027-01-01T00:00:00Z' });
+  assert.equal((await handlers.link(request('POST', 'alice'), context)).status, 409);
+  assert.equal((await handlers.accounts(request('GET', 'bob'), context)).status, 404);
+  assert.equal((await handlers.disconnect(request('DELETE', 'bob'), context)).status, 404);
+  assert.equal((await handlers.exchange(request('POST', 'bob', { publicToken: 'public-sandbox-alice' }), context)).status, 404);
+  assert.equal((await handlers.exchange(request('POST', 'alice', { publicToken: 'public-sandbox-bob' }), context)).status, 400);
+  assert.equal((await handlers.exchange(request('POST', 'alice', { publicToken: 'public-production-alice' }), context)).status, 400);
+  assert.equal((await handlers.exchange(request('POST', 'alice', { publicToken: 'public-sandbox-alice', ownerUid: 'bob' }), context)).status, 400);
+  assert.equal((await handlers.exchange(request('POST', 'alice', { publicToken: 'public-sandbox-alice' }), context)).status, 204);
+  assert.equal(store.rows.get('alice')?.status, 'ACTIVE');
+  assert.ok(!store.rows.get('alice')?.encryptedToken.includes('access-sandbox-alice'));
+  assert.equal((await handlers.accounts(request('GET', 'bob'), context)).status, 404);
+  assert.equal((await handlers.balance(request('GET', 'bob'), context)).status, 404);
+  assert.equal((await handlers.disconnect(request('DELETE', 'bob'), context)).status, 404);
+  const accounts = await handlers.accounts(request('GET', 'alice'), context);
+  assert.deepEqual(accounts.jsonBody, { accounts: [{
+    accountId: 'account', name: 'Checking', mask: '1234', type: 'depository', subtype: 'checking',
+    balances: { available: 2, current: 3, limit: null, isoCurrencyCode: 'USD', unofficialCurrencyCode: null },
+  }] });
+  await handlers.balance(request('GET', 'alice'), context);
+  assert.deepEqual(gateway.used.map(entry => entry.live), [false, true]);
+  gateway.shouldFailRemove = true;
+  assert.equal((await handlers.disconnect(request('DELETE', 'alice'), context)).status, 502);
+  assert.equal(store.rows.get('alice')?.status, 'DISCONNECTING');
+  assert.equal((await handlers.accounts(request('GET', 'alice'), context)).status, 409);
+  gateway.shouldFailRemove = false;
+  assert.equal((await handlers.disconnect(request('DELETE', 'alice'), context)).status, 204);
+  assert.deepEqual(gateway.removed, ['access-sandbox-alice']);
+  assert.equal(store.rows.has('alice'), false);
+});
+
+test('simultaneous exchange consumes a session only once', async () => {
+  const gateway = new FakeGateway();
+  const service = new PlaidService(new MemoryStore(), gateway);
+  await service.link('alice');
+  const results = await Promise.allSettled([
+    service.exchange('alice', 'public-sandbox-alice'),
+    service.exchange('alice', 'public-sandbox-alice'),
+  ]);
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+});
+
+test('exchange persistence failure removes the newly created Plaid Item', async () => {
+  const store = new MemoryStore();
+  const gateway = new FakeGateway();
+  const service = new PlaidService(store, gateway);
+  await service.link('alice');
+  const originalTransition = store.transition.bind(store);
+  store.transition = async (...args) => {
+    if (args[2] === 'ACTIVE') throw new Error('database unavailable');
+    return originalTransition(...args);
+  };
+  await assert.rejects(service.exchange('alice', 'public-sandbox-alice'));
+  assert.deepEqual(gateway.removed, ['access-sandbox-alice']);
+  assert.equal(await store.get('alice'), null);
+});
+
+test('ambiguous exchange failures stay locked and do not expose upstream errors', async () => {
+  const store = new MemoryStore();
+  const gateway = new FakeGateway();
+  gateway.exchange = async () => { throw new Error('sensitive upstream message'); };
+  const handlers = createPlaidHandlers({ verify, service: new PlaidService(store, gateway) });
+  await handlers.link(request('POST', 'alice'), context);
+  const failed = await handlers.exchange(request('POST', 'alice', { publicToken: 'public-sandbox-alice' }), context);
+  assert.equal(failed.status, 502);
+  assert.deepEqual(failed.jsonBody, { error: 'Plaid Sandbox service unavailable' });
+  assert.equal((await store.get('alice'))?.status, 'EXCHANGING');
+  assert.equal((await handlers.disconnect(request('DELETE', 'alice'), context)).status, 409);
+  assert.equal((await handlers.exchange(request('POST', 'alice', { publicToken: 'public-sandbox-alice' }), context)).status, 409);
+});
+
+test('pending Link sessions can be canceled and replaced', async () => {
+  const service = new PlaidService(new MemoryStore(), new FakeGateway());
+  await service.link('alice');
+  await service.disconnect('alice');
+  assert.equal((await service.link('alice')).linkToken, 'link-sandbox-alice');
+});
+
+test('Plaid SDK sends Sandbox requests and checks Link session tokens', async () => {
+  const oldFetch = globalThis.fetch;
+  const oldEnv = { ...process.env };
+  const paths: string[] = [];
+  try {
+    process.env.PLAID_ENV = 'sandbox';
+    process.env.PLAID_CLIENT_ID = 'test-client';
+    process.env.PLAID_SECRET = 'test-secret';
+    globalThis.fetch = async (input, init) => {
+      const request = new Request(input, init);
+      const url = new URL(request.url);
+      assert.equal(url.origin, 'https://sandbox.plaid.com');
+      paths.push(url.pathname);
+      if (url.pathname === '/link/token/create') return Response.json({ link_token: 'link-sandbox-one', expiration: '2027-01-01T00:00:00Z', request_id: 'r' });
+      if (url.pathname === '/link/token/get') return Response.json({
+        link_token: 'link-sandbox-one', created_at: null, expiration: null, metadata: {}, request_id: 'r',
+        link_sessions: [{ link_session_id: 'x', results: { item_add_results: [{ public_token: 'public-sandbox-one' }] },
+          on_success: { public_token: 'public-sandbox-legacy', metadata: null } }],
+      });
+      if (url.pathname === '/item/public_token/exchange') return Response.json({ access_token: 'access-sandbox-one', item_id: 'item', request_id: 'r' });
+      if (url.pathname === '/accounts/get' || url.pathname === '/accounts/balance/get') return Response.json({
+        accounts: [{ account_id: 'a', name: 'Checking', mask: '1234', official_name: null, type: 'depository', subtype: 'checking',
+          balances: { available: 2, current: 3, limit: null, iso_currency_code: 'USD', unofficial_currency_code: null } }],
+        item: {}, request_id: 'r',
+      });
+      if (url.pathname === '/item/remove') return Response.json({ request_id: 'r' });
+      throw new Error(`Unexpected request ${url.pathname}`);
+    };
+    const gateway = new SandboxPlaidGateway();
+    assert.equal((await gateway.createLink('alice')).linkToken, 'link-sandbox-one');
+    assert.equal(await gateway.publicTokenBelongsToLink('link-sandbox-one', 'public-sandbox-one'), true);
+    assert.equal(await gateway.publicTokenBelongsToLink('link-sandbox-one', 'public-sandbox-other'), false);
+    assert.equal(await gateway.publicTokenBelongsToLink('link-sandbox-one', 'public-sandbox-legacy'), true);
+    assert.equal((await gateway.exchange('public-sandbox-one')).accessToken, 'access-sandbox-one');
+    assert.equal((await gateway.accounts('access-sandbox-one', false))[0].account_id, 'a');
+    assert.equal((await gateway.accounts('access-sandbox-one', true))[0].balances.current, 3);
+    await gateway.remove('access-sandbox-one');
+    assert.deepEqual(paths, ['/link/token/create', '/link/token/get', '/link/token/get', '/link/token/get',
+      '/item/public_token/exchange', '/accounts/get', '/accounts/balance/get', '/item/remove']);
+    process.env.PLAID_ENV = 'production';
+    assert.throws(() => new SandboxPlaidGateway());
+  } finally {
+    globalThis.fetch = oldFetch;
+    for (const name of ['PLAID_ENV', 'PLAID_CLIENT_ID', 'PLAID_SECRET']) {
+      if (oldEnv[name] === undefined) delete process.env[name];
+      else process.env[name] = oldEnv[name];
+    }
+  }
+});
+
+test('PostgreSQL connection persistence uses UID and conditional state transitions', { skip: !process.env.TEST_DATABASE_URL }, async () => {
+  const db = new PrismaClient({ datasources: { db: { url: process.env.TEST_DATABASE_URL } } });
+  const owner = `plaid-test-${randomUUID()}`;
+  const store = new PrismaConnectionStore(db);
+  try {
+    await store.create(owner, 'encrypted');
+    assert.equal(await store.get(`${owner}-other`), null);
+    await assert.rejects(store.create(owner, 'another'), PlaidConflictError);
+    assert.equal(await store.transition(owner, 'LINKING', 'EXCHANGING', 'wrong'), false);
+    assert.equal(await store.transition(owner, 'LINKING', 'EXCHANGING', 'encrypted'), true);
+    assert.equal(await store.transition(owner, 'LINKING', 'EXCHANGING', 'encrypted'), false);
+    assert.equal(await store.delete(owner, 'EXCHANGING', 'wrong'), false);
+    assert.equal(await store.delete(owner, 'EXCHANGING', 'encrypted'), true);
+  } finally {
+    await db.plaidConnection.deleteMany({ where: { ownerUid: owner } });
+    await db.$disconnect();
+  }
+});
