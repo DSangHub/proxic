@@ -9,3 +9,6 @@ nav { display:flex; gap:18px; padding:20px 24px; border-bottom:1px solid #21415c
 button { border:0; background:#35d399; color:#032014; padding:11px 16px; border-radius:10px; font-weight:700; cursor:pointer; }
 input,textarea { width:100%; background:#081522; color:white; border:1px solid #31536c; border-radius:10px; padding:12px; }
 .muted { color:#a9c2d5; }
+.auth-controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px; max-width:1050px; margin:auto; padding:16px 24px 0; }
+button:disabled { opacity:.6; cursor:not-allowed; }
+[role="alert"] { color:#ffb4a9; }
