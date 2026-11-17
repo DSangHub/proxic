@@ -10,5 +10,11 @@ Create an Azure Function App compatible with Node.js 22 and the Node.js v4 progr
 
 For local Functions development, configure these settings in the ignored `services/functions/local.settings.json` file under `Values` (alongside the usual Azure Functions settings). The function verifies ID tokens, including revocation, on every protected request; an invalid or revoked token returns 401, while configuration or verification-service failures return 500.
 
+Set server-only `DATABASE_URL` to PostgreSQL, generate the Prisma client with `pnpm --filter @proxic/db build`, and apply migrations with `pnpm --filter @proxic/db migrate:deploy` before starting Functions. The checked-in first migration is a baseline of the original User/Task/Approval/AuditEvent schema. For an existing database already matching that schema, back it up and baseline it with `pnpm --filter @proxic/db exec prisma migrate resolve --applied 20260101000000_legacy_baseline` before running `migrate:deploy`; do not baseline a new or mismatched database.
+
+Build a Linux deployment artifact from the workspace root with `pnpm build` followed by `pnpm --filter @proxic/functions deploy --legacy --prod /absolute/path/to/function-package`. Generate the Prisma client inside that artifact with `pnpm --filter @proxic/db exec prisma generate --schema /absolute/path/to/function-package/node_modules/@proxic/db/prisma/schema.prisma`. Deploy the resulting directory, including its generated Prisma client and matching platform engine. Generate on a platform compatible with the Azure host.
+
+The duplicate fingerprint compares normalized merchant, amount, currency, due date, and last four within an owner. Matching submissions return 409 and require manual review; similar legitimate bills can match. Creation, detail review, approval, and rejection are audited transactionally. Future payment-state transitions must likewise write `bill.payment_state_changed` in the same transaction, but no such transition or payment execution is implemented.
+
 ## GitHub
 CI builds and type-checks the monorepo. Add a separate Azure deployment workflow only after creating the Function App and configuring GitHub/Azure deployment credentials.

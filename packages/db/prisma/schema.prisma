@@ -1,6 +1,114 @@
-generator client { provider = "prisma-client-js" }
-datasource db { provider = "postgresql" url = env("DATABASE_URL") }
-model User { id String @id @default(uuid()) email String @unique createdAt DateTime @default(now()) tasks Task[] }
-model Task { id String @id @default(uuid()) userId String title String status String @default("pending") proxy String riskLevel Int @default(1) createdAt DateTime @default(now()) user User @relation(fields:[userId],references:[id]) approvals Approval[] }
-model Approval { id String @id @default(uuid()) taskId String status String @default("pending") createdAt DateTime @default(now()) task Task @relation(fields:[taskId],references:[id]) }
-model AuditEvent { id String @id @default(uuid()) actor String action String resource String metadata Json? createdAt DateTime @default(now()) }
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+  tasks     Task[]
+}
+
+model Task {
+  id        String     @id @default(uuid())
+  userId    String
+  title     String
+  status    String     @default("pending")
+  proxy     String
+  riskLevel Int        @default(1)
+  createdAt DateTime   @default(now())
+  user      User       @relation(fields: [userId], references: [id])
+  approvals Approval[]
+}
+
+model Bill {
+  id               String           @id @default(uuid())
+  ownerUid         String
+  merchant         String
+  amountMinor      Int
+  currency         String
+  dueDate          DateTime         @db.Date
+  accountLastFour  String?
+  source           BillSource
+  status           BillStatus       @default(AWAITING_APPROVAL)
+  riskLevel        Int
+  approvalRequired Boolean
+  fingerprint      String
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  reviewedAt       DateTime?
+  decidedAt        DateTime?
+  submissions      BillSubmission[]
+  approvals        Approval[]
+  auditEvents      AuditEvent[]
+
+  @@unique([ownerUid, fingerprint])
+  @@unique([id, ownerUid])
+  @@index([ownerUid, createdAt])
+}
+
+model BillSubmission {
+  id          String     @id @default(uuid())
+  billId      String
+  ownerUid    String
+  source      BillSource
+  receivedAt  DateTime   @default(now())
+  processedAt DateTime   @default(now())
+  bill        Bill       @relation(fields: [billId, ownerUid], references: [id, ownerUid])
+
+  @@index([ownerUid, billId])
+}
+
+model ForwardingAlias {
+  id        String    @id @default(uuid())
+  ownerUid  String
+  alias     String    @unique
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+}
+
+model Approval {
+  id             String    @id @default(uuid())
+  taskId         String?
+  task           Task?     @relation(fields: [taskId], references: [id])
+  billId         String?
+  ownerUid       String?
+  bill           Bill?     @relation(fields: [billId, ownerUid], references: [id, ownerUid])
+  status         String    @default("pending")
+  proposedAction Json?
+  createdAt      DateTime  @default(now())
+  decidedAt      DateTime?
+
+  @@index([ownerUid, billId, status])
+}
+
+model AuditEvent {
+  id        String   @id @default(uuid())
+  actor     String
+  action    String
+  resource  String
+  metadata  Json?
+  createdAt DateTime @default(now())
+  ownerUid  String?
+  billId    String?
+  bill      Bill?    @relation(fields: [billId, ownerUid], references: [id, ownerUid])
+
+  @@index([ownerUid, billId, createdAt])
+}
+
+enum BillSource {
+  MANUAL
+  FORWARDED_EMAIL
+}
+
+enum BillStatus {
+  AWAITING_APPROVAL
+  APPROVED
+  REJECTED
+}
