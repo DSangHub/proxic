@@ -1,0 +1,1 @@
+{"name":"@proxic/db","version":"0.0.1","private":true,"scripts":{"typecheck":"echo db-schema-ok","build":"echo db-schema-ok"}}
