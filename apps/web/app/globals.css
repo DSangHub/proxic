@@ -12,3 +12,4 @@ input,textarea { width:100%; background:#081522; color:white; border:1px solid #
 .auth-controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px; max-width:1050px; margin:auto; padding:16px 24px 0; }
 button:disabled { opacity:.6; cursor:not-allowed; }
 [role="alert"] { color:#ffb4a9; }
+.bank-account { border-top:1px solid #244864; margin-top:16px; }

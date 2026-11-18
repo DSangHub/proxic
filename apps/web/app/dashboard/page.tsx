@@ -49,6 +49,6 @@ export default function Dashboard() {
   return <main><h1>Your Proxies</h1><p className="muted">Start with three narrow agents and one shared approval layer.</p>
     <div className="grid">{items.map(([name, description]) => <div className="card" key={name}><h2>{name}</h2><p>{description}</p></div>)}</div>
     <section><h2>Bills</h2>{loading ? <p>Loading sign-in...</p> : user ? <Bills key={user.uid} user={user}/> : <p>Sign in to see your bills.</p>}</section>
-    {user && <BankConnection key={user.uid} user={user}/>}
+    {user ? <BankConnection key={user.uid} user={user}/> : <section><h2>Bank Connections</h2><p>{loading ? 'Loading sign-in...' : 'Sign in to connect a Sandbox bank.'}</p></section>}
   </main>;
 }

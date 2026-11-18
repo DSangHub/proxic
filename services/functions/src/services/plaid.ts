@@ -14,8 +14,14 @@ export type BankMetadata = {
   institutionName: string | null;
   accounts: { accountId: string; displayName: string; mask: string | null; type: string; subtype: string | null }[];
 };
+export type BankConnectionView = {
+  status: PlaidConnectionState;
+  institutionName: string | null;
+  accounts: { accountId: string; mask: string | null; type: string; subtype: string | null }[];
+};
 export interface ConnectionStore {
   get(ownerUid: string): Promise<Connection | null>;
+  getMetadata(ownerUid: string): Promise<BankConnectionView | null>;
   create(ownerUid: string, encryptedToken: string): Promise<void>;
   transition(ownerUid: string, from: PlaidConnectionState, to: PlaidConnectionState, expectedToken: string, encryptedToken?: string, linkedItem?: LinkedItem): Promise<boolean>;
   syncMetadata(ownerUid: string, expectedToken: string, metadata: BankMetadata): Promise<boolean>;
@@ -26,6 +32,15 @@ export class PrismaConnectionStore implements ConnectionStore {
   constructor(private readonly db: PrismaClient) {}
   get(ownerUid: string) {
     return this.db.plaidConnection.findUnique({ where: { ownerUid }, select: { status: true, encryptedToken: true } });
+  }
+  getMetadata(ownerUid: string) {
+    return this.db.bankConnection.findUnique({
+      where: { ownerUid },
+      select: {
+        status: true, institutionName: true,
+        accounts: { select: { accountId: true, mask: true, type: true, subtype: true }, orderBy: { createdAt: 'asc' } },
+      },
+    });
   }
   async create(ownerUid: string, encryptedToken: string) {
     try {
@@ -170,6 +185,12 @@ function accountView(account: Plaid.AccountBase) {
 
 export class PlaidService {
   constructor(private readonly store: ConnectionStore, private readonly gateway: PlaidGateway) {}
+
+  async connection(ownerUid: string): Promise<BankConnectionView> {
+    const connection = await this.store.getMetadata(ownerUid);
+    if (!connection) throw new PlaidNotFoundError('Connection not found');
+    return { ...connection, accounts: connection.accounts.map(account => ({ ...account, mask: safeMask(account.mask) })) };
+  }
 
   async link(ownerUid: string) {
     if (await this.store.get(ownerUid)) throw new PlaidConflictError('A connection or Link session already exists');

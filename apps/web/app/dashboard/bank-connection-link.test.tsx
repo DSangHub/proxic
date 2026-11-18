@@ -13,7 +13,10 @@ it('initializes the real React Plaid hook and exchanges the Link callback token'
   const fetchMock = vi.fn<typeof fetch>()
     .mockResolvedValueOnce(new Response(null, { status: 404 }))
     .mockResolvedValueOnce(Response.json({ linkToken: 'link-sandbox-session' }))
-    .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    .mockResolvedValueOnce(Response.json({ status: 'ACTIVE', institutionName: 'Example Bank', accounts: [] }))
+    .mockResolvedValueOnce(Response.json({ accounts: [] }))
+    .mockResolvedValueOnce(Response.json({ status: 'ACTIVE', institutionName: 'Example Bank', accounts: [] }));
   vi.stubGlobal('fetch', fetchMock);
   let config: PlaidLinkOptions | undefined;
   const open = vi.fn();
@@ -24,7 +27,7 @@ it('initializes the real React Plaid hook and exchanges the Link callback token'
     },
   });
   render(<BankConnection user={{ getIdToken: async () => 'firebase-id-token' }}/>);
-  fireEvent.click(await screen.findByRole('button', { name: 'Connect Sandbox bank' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect Bank' }));
   const button = await screen.findByRole('button', { name: 'Open Plaid Link' });
   const script = document.querySelector('script[src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"]');
   expect(script).not.toBeNull();
@@ -34,6 +37,6 @@ it('initializes the real React Plaid hook and exchanges the Link callback token'
   expect(open).toHaveBeenCalledOnce();
   expect(config?.token).toBe('link-sandbox-session');
   act(() => config?.onSuccess('public-sandbox-example', { institution: null, accounts: [], link_session_id: 'test' }));
-  await screen.findByText('Sandbox bank connected.');
+  await screen.findByText('Connection status: Connected');
   expect(fetchMock.mock.calls[2][1]?.body).toBe(JSON.stringify({ publicToken: 'public-sandbox-example' }));
 });

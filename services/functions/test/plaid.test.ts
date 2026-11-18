@@ -25,6 +25,15 @@ class MemoryStore implements ConnectionStore {
   rows = new Map<string, { status: PlaidConnectionState; encryptedToken: string }>();
   metadata = new Map<string, BankMetadata>();
   async get(ownerUid: string) { return this.rows.get(ownerUid) ?? null; }
+  async getMetadata(ownerUid: string) {
+    const row = this.rows.get(ownerUid);
+    if (!row) return null;
+    const metadata = this.metadata.get(ownerUid);
+    return {
+      status: row.status, institutionName: metadata?.institutionName ?? null,
+      accounts: (metadata?.accounts ?? []).map(({ accountId, mask, type, subtype }) => ({ accountId, mask, type, subtype })),
+    };
+  }
   async create(ownerUid: string, encryptedToken: string) {
     if (this.rows.has(ownerUid)) throw new PlaidConflictError('Already connected');
     this.rows.set(ownerUid, { status: 'LINKING', encryptedToken });
@@ -104,12 +113,20 @@ test('link, exchange, account access and disconnect are scoped to the verified u
   assert.equal((await handlers.link(request('POST', 'alice'), context)).status, 409);
   assert.equal((await handlers.accounts(request('GET', 'bob'), context)).status, 404);
   assert.equal((await handlers.disconnect(request('DELETE', 'bob'), context)).status, 404);
+  assert.equal((await handlers.connection(request('GET', 'bob'), context)).status, 404);
+  assert.deepEqual((await handlers.connection(request('GET', 'alice'), context)).jsonBody, {
+    status: 'LINKING', institutionName: null, accounts: [],
+  });
   assert.equal((await handlers.exchange(request('POST', 'bob', { publicToken: 'public-sandbox-alice' }), context)).status, 404);
   assert.equal((await handlers.exchange(request('POST', 'alice', { publicToken: 'public-sandbox-bob' }), context)).status, 400);
   assert.equal((await handlers.exchange(request('POST', 'alice', { publicToken: 'public-production-alice' }), context)).status, 400);
   assert.equal((await handlers.exchange(request('POST', 'alice', { publicToken: 'public-sandbox-alice', ownerUid: 'bob' }), context)).status, 400);
   assert.equal((await handlers.exchange(request('POST', 'alice', { publicToken: 'public-sandbox-alice' }), context)).status, 204);
   assert.equal(store.rows.get('alice')?.status, 'ACTIVE');
+  assert.deepEqual((await handlers.connection(request('GET', 'alice'), context)).jsonBody, {
+    status: 'ACTIVE', institutionName: 'Example Bank',
+    accounts: [{ accountId: 'account', mask: '1234', type: 'depository', subtype: 'checking' }],
+  });
   assert.ok(!store.rows.get('alice')?.encryptedToken.includes('access-sandbox-alice'));
   assert.equal((await handlers.accounts(request('GET', 'bob'), context)).status, 404);
   assert.equal((await handlers.balance(request('GET', 'bob'), context)).status, 404);
@@ -312,6 +329,11 @@ test('PostgreSQL stores owner-scoped bank metadata separately from encrypted tok
     }
     const otherOwner = `${owner}-other`;
     assert.equal((await handlers.accounts(request('GET', otherOwner), context)).status, 404);
+    assert.equal((await handlers.connection(request('GET', otherOwner), context)).status, 404);
+    const connection = await handlers.connection(request('GET', owner), context);
+    assert.equal(JSON.stringify(connection.jsonBody).includes('access-sandbox-'), false);
+    assert.equal(JSON.stringify(connection.jsonBody).includes('full-account-number'), false);
+    assert.equal((connection.jsonBody as { institutionName: string }).institutionName, 'Example Bank');
     const response = await handlers.accounts(request('GET', owner), context);
     assert.equal(JSON.stringify(response.jsonBody).includes('access-sandbox-'), false);
     assert.equal(JSON.stringify(response.jsonBody).includes('full-account-number'), false);

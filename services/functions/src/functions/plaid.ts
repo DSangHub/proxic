@@ -7,7 +7,7 @@ const headers = { 'Cache-Control': 'no-store' };
 
 export function createPlaidHandlers(options: Options = {}) {
   const service = () => options.service ?? getPlaidService();
-  function handler(operation: 'link' | 'exchange' | 'accounts' | 'balance' | 'disconnect') {
+  function handler(operation: 'link' | 'exchange' | 'accounts' | 'balance' | 'connection' | 'disconnect') {
     return async (request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> => {
       const auth = await authenticate(request, context, options.verify);
       if (auth.response) return { ...auth.response, headers };
@@ -29,6 +29,7 @@ export function createPlaidHandlers(options: Options = {}) {
           await service().disconnect(auth.user.uid);
           return { status: 204, headers };
         }
+        if (operation === 'connection') return { headers, jsonBody: await service().connection(auth.user.uid) };
         return { headers, jsonBody: { accounts: await service().accounts(auth.user.uid, operation === 'balance') } };
       } catch (error) {
         if (error instanceof PlaidInvalidTokenError) return { status: 400, headers, jsonBody: { error: error.message } };
@@ -42,7 +43,7 @@ export function createPlaidHandlers(options: Options = {}) {
   }
   return {
     link: handler('link'), exchange: handler('exchange'), accounts: handler('accounts'),
-    balance: handler('balance'), disconnect: handler('disconnect'),
+    balance: handler('balance'), connection: handler('connection'), disconnect: handler('disconnect'),
   };
 }
 
@@ -51,4 +52,8 @@ app.http('plaidLinkToken', { methods: ['POST'], authLevel: 'anonymous', route: '
 app.http('plaidExchangeToken', { methods: ['POST'], authLevel: 'anonymous', route: 'plaid/exchange-token', handler: handlers.exchange });
 app.http('plaidAccounts', { methods: ['GET'], authLevel: 'anonymous', route: 'plaid/accounts', handler: handlers.accounts });
 app.http('plaidBalance', { methods: ['GET'], authLevel: 'anonymous', route: 'plaid/balance', handler: handlers.balance });
-app.http('plaidDisconnect', { methods: ['DELETE'], authLevel: 'anonymous', route: 'plaid/connection', handler: handlers.disconnect });
+app.http('plaidConnection', {
+  methods: ['GET', 'DELETE'], authLevel: 'anonymous', route: 'plaid/connection',
+  handler: (request, context) => request.method === 'GET'
+    ? handlers.connection(request, context) : handlers.disconnect(request, context),
+});
