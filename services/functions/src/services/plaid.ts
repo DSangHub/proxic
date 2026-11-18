@@ -8,6 +8,7 @@ export class PlaidInvalidTokenError extends Error {}
 
 type Connection = { status: PlaidConnectionState; encryptedToken: string };
 type LinkedItem = { itemId: string; institutionId: string | null; institutionName: string | null };
+type ConnectionAttempt = 'link' | 'exchange';
 export type BankMetadata = {
   itemId: string;
   institutionId: string | null;
@@ -26,6 +27,7 @@ export interface ConnectionStore {
   transition(ownerUid: string, from: PlaidConnectionState, to: PlaidConnectionState, expectedToken: string, encryptedToken?: string, linkedItem?: LinkedItem): Promise<boolean>;
   syncMetadata(ownerUid: string, expectedToken: string, metadata: BankMetadata): Promise<boolean>;
   delete(ownerUid: string, status: PlaidConnectionState, expectedToken: string): Promise<boolean>;
+  connectionFailed(ownerUid: string, stage: ConnectionAttempt): Promise<void>;
 }
 
 export class PrismaConnectionStore implements ConnectionStore {
@@ -62,7 +64,7 @@ export class PrismaConnectionStore implements ConnectionStore {
         data: { status: to, ...(encryptedToken === undefined ? {} : { encryptedToken }) },
       });
       if (!result.count) return false;
-      await tx.bankConnection.update({
+      const bank = await tx.bankConnection.update({
         where: { ownerUid }, data: {
           status: to,
           ...(linkedItem ? {
@@ -70,6 +72,11 @@ export class PrismaConnectionStore implements ConnectionStore {
           } : {}),
         },
       });
+      if (from === 'EXCHANGING' && to === 'ACTIVE') {
+        await tx.auditEvent.create({ data: {
+          actor: ownerUid, ownerUid, action: 'bank.connected', resource: `bank_connection:${bank.id}`,
+        } });
+      }
       return true;
     });
   }
@@ -104,7 +111,25 @@ export class PrismaConnectionStore implements ConnectionStore {
     });
   }
   async delete(ownerUid: string, status: PlaidConnectionState, expectedToken: string) {
-    return (await this.db.plaidConnection.deleteMany({ where: { ownerUid, status, encryptedToken: expectedToken } })).count === 1;
+    return this.db.$transaction(async tx => {
+      const bank = status === 'DISCONNECTING'
+        ? await tx.bankConnection.findUnique({ where: { ownerUid }, select: { id: true } }) : null;
+      const deleted = await tx.plaidConnection.deleteMany({ where: { ownerUid, status, encryptedToken: expectedToken } });
+      if (!deleted.count) return false;
+      if (status === 'DISCONNECTING') {
+        if (!bank) throw new Error('Bank connection metadata missing');
+        await tx.auditEvent.create({ data: {
+          actor: ownerUid, ownerUid, action: 'bank.disconnected', resource: `bank_connection:${bank.id}`,
+        } });
+      }
+      return true;
+    });
+  }
+  async connectionFailed(ownerUid: string, stage: ConnectionAttempt) {
+    await this.db.auditEvent.create({ data: {
+      actor: ownerUid, ownerUid, action: 'bank.connection_failed',
+      resource: 'bank_connection', metadata: { stage },
+    } });
   }
 }
 
@@ -184,7 +209,25 @@ function accountView(account: Plaid.AccountBase) {
 }
 
 export class PlaidService {
-  constructor(private readonly store: ConnectionStore, private readonly gateway: PlaidGateway) {}
+  private resolvedGateway?: PlaidGateway;
+  constructor(private readonly store: ConnectionStore, private readonly gatewaySource: PlaidGateway | (() => PlaidGateway)) {}
+
+  private get gateway(): PlaidGateway {
+    return this.resolvedGateway ??= typeof this.gatewaySource === 'function' ? this.gatewaySource() : this.gatewaySource;
+  }
+
+  connectionFailed(ownerUid: string, stage: ConnectionAttempt) {
+    return this.store.connectionFailed(ownerUid, stage);
+  }
+
+  private async attempt<T>(ownerUid: string, stage: ConnectionAttempt, operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      await this.connectionFailed(ownerUid, stage);
+      throw error;
+    }
+  }
 
   async connection(ownerUid: string): Promise<BankConnectionView> {
     const connection = await this.store.getMetadata(ownerUid);
@@ -193,6 +236,10 @@ export class PlaidService {
   }
 
   async link(ownerUid: string) {
+    return this.attempt(ownerUid, 'link', () => this.createLink(ownerUid));
+  }
+
+  private async createLink(ownerUid: string) {
     if (await this.store.get(ownerUid)) throw new PlaidConflictError('A connection or Link session already exists');
     // Validate the encryption key before issuing a Link token.
     encryptPlaidToken('key-check', ownerUid);
@@ -203,6 +250,10 @@ export class PlaidService {
   }
 
   async exchange(ownerUid: string, publicToken: string) {
+    return this.attempt(ownerUid, 'exchange', () => this.exchangeToken(ownerUid, publicToken));
+  }
+
+  private async exchangeToken(ownerUid: string, publicToken: string) {
     if (!/^public-sandbox-[A-Za-z0-9-]+$/.test(publicToken)) throw new PlaidInvalidTokenError('Invalid Sandbox public token');
     const connection = await this.store.get(ownerUid);
     if (!connection) throw new PlaidNotFoundError('Link session not found');
@@ -272,12 +323,14 @@ export class PlaidService {
     const token = decryptPlaidToken(connection.encryptedToken, ownerUid);
     if (!token.startsWith('access-sandbox-')) throw new Error('Invalid stored Sandbox token');
     await this.gateway.remove(token);
-    await this.store.delete(ownerUid, 'DISCONNECTING', connection.encryptedToken);
+    if (!await this.store.delete(ownerUid, 'DISCONNECTING', connection.encryptedToken)) {
+      throw new PlaidConflictError('Connection state changed');
+    }
   }
 }
 
 let service: PlaidService | undefined;
 export function getPlaidService() {
-  if (!service) service = new PlaidService(new PrismaConnectionStore(new PrismaClient()), new SandboxPlaidGateway());
+  if (!service) service = new PlaidService(new PrismaConnectionStore(new PrismaClient()), () => new SandboxPlaidGateway());
   return service;
 }

@@ -15,11 +15,18 @@ export function createPlaidHandlers(options: Options = {}) {
         if (operation === 'link') return { headers, jsonBody: await service().link(auth.user.uid) };
         if (operation === 'exchange') {
           const body = await request.text();
-          if (body.length > 2048) return { status: 413, headers, jsonBody: { error: 'Request too large' } };
+          if (body.length > 2048) {
+            await service().connectionFailed(auth.user.uid, 'exchange');
+            return { status: 413, headers, jsonBody: { error: 'Request too large' } };
+          }
           let data: unknown;
-          try { data = JSON.parse(body); } catch { return { status: 400, headers, jsonBody: { error: 'Invalid JSON' } }; }
+          try { data = JSON.parse(body); } catch {
+            await service().connectionFailed(auth.user.uid, 'exchange');
+            return { status: 400, headers, jsonBody: { error: 'Invalid JSON' } };
+          }
           if (typeof data !== 'object' || data === null || Array.isArray(data) ||
               Object.keys(data).length !== 1 || !('publicToken' in data) || typeof data.publicToken !== 'string') {
+            await service().connectionFailed(auth.user.uid, 'exchange');
             return { status: 400, headers, jsonBody: { error: 'publicToken is required' } };
           }
           await service().exchange(auth.user.uid, data.publicToken);

@@ -24,6 +24,7 @@ const request = (method: string, token?: string, body?: unknown) => new HttpRequ
 class MemoryStore implements ConnectionStore {
   rows = new Map<string, { status: PlaidConnectionState; encryptedToken: string }>();
   metadata = new Map<string, BankMetadata>();
+  audits: { ownerUid: string; action: string; stage?: 'link' | 'exchange' }[] = [];
   async get(ownerUid: string) { return this.rows.get(ownerUid) ?? null; }
   async getMetadata(ownerUid: string) {
     const row = this.rows.get(ownerUid);
@@ -42,13 +43,18 @@ class MemoryStore implements ConnectionStore {
     const row = this.rows.get(ownerUid);
     if (!row || row.status !== from || row.encryptedToken !== expected) return false;
     this.rows.set(ownerUid, { status: to, encryptedToken: encryptedToken ?? row.encryptedToken });
+    if (from === 'EXCHANGING' && to === 'ACTIVE') this.audits.push({ ownerUid, action: 'bank.connected' });
     return true;
   }
   async delete(ownerUid: string, status: PlaidConnectionState, expected: string) {
     const row = this.rows.get(ownerUid);
     if (!row || row.status !== status || row.encryptedToken !== expected) return false;
     this.metadata.delete(ownerUid);
+    if (status === 'DISCONNECTING') this.audits.push({ ownerUid, action: 'bank.disconnected' });
     return this.rows.delete(ownerUid);
+  }
+  async connectionFailed(ownerUid: string, stage: 'link' | 'exchange') {
+    this.audits.push({ ownerUid, action: 'bank.connection_failed', stage });
   }
   async syncMetadata(ownerUid: string, expected: string, metadata: BankMetadata) {
     const row = this.rows.get(ownerUid);
@@ -193,10 +199,30 @@ test('ambiguous exchange failures stay locked and do not expose upstream errors'
 });
 
 test('pending Link sessions can be canceled and replaced', async () => {
-  const service = new PlaidService(new MemoryStore(), new FakeGateway());
+  const store = new MemoryStore();
+  const service = new PlaidService(store, new FakeGateway());
   await service.link('alice');
   await service.disconnect('alice');
+  assert.deepEqual(store.audits, []);
   assert.equal((await service.link('alice')).linkToken, 'link-sandbox-alice');
+});
+
+test('connection failures are audited without provider details and audit failures are surfaced', async () => {
+  const store = new MemoryStore();
+  const gateway = new FakeGateway();
+  gateway.createLink = async () => { throw new Error('provider-secret'); };
+  const handlers = createPlaidHandlers({ verify, service: new PlaidService(store, gateway) });
+  assert.equal((await handlers.link(request('POST', 'alice'), context)).status, 502);
+  assert.equal((await handlers.exchange(request('POST', 'bob', { publicToken: 'invalid-secret' }), context)).status, 400);
+  assert.equal((await handlers.exchange(request('POST', 'bob', { unexpected: 'invalid-secret' }), context)).status, 400);
+  assert.deepEqual(store.audits, [
+    { ownerUid: 'alice', action: 'bank.connection_failed', stage: 'link' },
+    { ownerUid: 'bob', action: 'bank.connection_failed', stage: 'exchange' },
+    { ownerUid: 'bob', action: 'bank.connection_failed', stage: 'exchange' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(store.audits), /provider-secret|invalid-secret/);
+  store.connectionFailed = async () => { throw new Error('database unavailable'); };
+  assert.equal((await handlers.link(request('POST', 'alice'), context)).status, 502);
 });
 
 test('metadata lookup failure preserves the encrypted connection for retry', async () => {
@@ -358,8 +384,21 @@ test('PostgreSQL stores owner-scoped bank metadata separately from encrypted tok
     assert.equal((await handlers.disconnect(request('DELETE', owner), context)).status, 204);
     assert.equal(await db.bankConnection.findUnique({ where: { ownerUid: owner } }), null);
     assert.equal(await db.bankAccount.count({ where: { bankConnectionId: saved.id } }), 0);
+    assert.equal((await handlers.connection(request('GET', owner), context)).status, 404);
+    assert.equal((await handlers.exchange(request('POST', owner, { publicToken: 'invalid-token' }), context)).status, 400);
+    const events = await db.auditEvent.findMany({ where: { ownerUid: owner }, orderBy: { createdAt: 'asc' } });
+    assert.deepEqual(events.map(event => event.action), ['bank.connected', 'bank.disconnected', 'bank.connection_failed']);
+    assert.deepEqual(events.map(event => event.actor), [owner, owner, owner]);
+    assert.equal(events[0].resource, `bank_connection:${saved.id}`);
+    assert.equal(events[1].resource, `bank_connection:${saved.id}`);
+    assert.deepEqual(events[2].metadata, { stage: 'exchange' });
+    assert.equal(await db.auditEvent.count({ where: { ownerUid: otherOwner } }), 0);
+    for (const forbidden of ['access-sandbox-', 'public-sandbox-', 'invalid-token', 'bank-password', 'bank-username', 'full-account-number']) {
+      assert.equal(JSON.stringify(events).includes(forbidden), false);
+    }
   } finally {
     await db.plaidConnection.deleteMany({ where: { ownerUid: owner } });
+    await db.auditEvent.deleteMany({ where: { ownerUid: owner } });
     await db.$disconnect();
   }
 });
