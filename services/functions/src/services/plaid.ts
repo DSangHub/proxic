@@ -7,10 +7,18 @@ export class PlaidNotFoundError extends Error {}
 export class PlaidInvalidTokenError extends Error {}
 
 type Connection = { status: PlaidConnectionState; encryptedToken: string };
+type LinkedItem = { itemId: string; institutionId: string | null; institutionName: string | null };
+export type BankMetadata = {
+  itemId: string;
+  institutionId: string | null;
+  institutionName: string | null;
+  accounts: { accountId: string; displayName: string; mask: string | null; type: string; subtype: string | null }[];
+};
 export interface ConnectionStore {
   get(ownerUid: string): Promise<Connection | null>;
   create(ownerUid: string, encryptedToken: string): Promise<void>;
-  transition(ownerUid: string, from: PlaidConnectionState, to: PlaidConnectionState, expectedToken: string, encryptedToken?: string): Promise<boolean>;
+  transition(ownerUid: string, from: PlaidConnectionState, to: PlaidConnectionState, expectedToken: string, encryptedToken?: string, linkedItem?: LinkedItem): Promise<boolean>;
+  syncMetadata(ownerUid: string, expectedToken: string, metadata: BankMetadata): Promise<boolean>;
   delete(ownerUid: string, status: PlaidConnectionState, expectedToken: string): Promise<boolean>;
 }
 
@@ -21,7 +29,10 @@ export class PrismaConnectionStore implements ConnectionStore {
   }
   async create(ownerUid: string, encryptedToken: string) {
     try {
-      await this.db.plaidConnection.create({ data: { ownerUid, encryptedToken } });
+      await this.db.$transaction(async tx => {
+        await tx.plaidConnection.create({ data: { ownerUid, encryptedToken } });
+        await tx.bankConnection.create({ data: { ownerUid } });
+      });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new PlaidConflictError('A connection or Link session already exists');
@@ -29,11 +40,53 @@ export class PrismaConnectionStore implements ConnectionStore {
       throw error;
     }
   }
-  async transition(ownerUid: string, from: PlaidConnectionState, to: PlaidConnectionState, expectedToken: string, encryptedToken?: string) {
-    const result = await this.db.plaidConnection.updateMany({
-      where: { ownerUid, status: from, encryptedToken: expectedToken }, data: { status: to, ...(encryptedToken === undefined ? {} : { encryptedToken }) },
+  async transition(ownerUid: string, from: PlaidConnectionState, to: PlaidConnectionState, expectedToken: string, encryptedToken?: string, linkedItem?: LinkedItem) {
+    return this.db.$transaction(async tx => {
+      const result = await tx.plaidConnection.updateMany({
+        where: { ownerUid, status: from, encryptedToken: expectedToken },
+        data: { status: to, ...(encryptedToken === undefined ? {} : { encryptedToken }) },
+      });
+      if (!result.count) return false;
+      await tx.bankConnection.update({
+        where: { ownerUid }, data: {
+          status: to,
+          ...(linkedItem ? {
+            plaidItemId: linkedItem.itemId, institutionId: linkedItem.institutionId, institutionName: linkedItem.institutionName,
+          } : {}),
+        },
+      });
+      return true;
     });
-    return result.count === 1;
+  }
+  async syncMetadata(ownerUid: string, expectedToken: string, metadata: BankMetadata) {
+    return this.db.$transaction(async tx => {
+      const locked = await tx.plaidConnection.updateMany({
+        where: { ownerUid, status: 'ACTIVE', encryptedToken: expectedToken }, data: { status: 'ACTIVE' },
+      });
+      if (!locked.count) return false;
+      const matches = await tx.bankConnection.updateMany({
+        where: { ownerUid, status: 'ACTIVE', OR: [{ plaidItemId: null }, { plaidItemId: metadata.itemId }] },
+        data: {
+          plaidItemId: metadata.itemId,
+          institutionId: metadata.institutionId ?? undefined,
+          institutionName: metadata.institutionName ?? undefined,
+        },
+      });
+      if (!matches.count) throw new Error('Plaid Item does not match the stored connection');
+      const connection = await tx.bankConnection.findUniqueOrThrow({ where: { ownerUid }, select: { id: true } });
+      await tx.bankAccount.deleteMany({
+        where: { bankConnectionId: connection.id, accountId: { notIn: metadata.accounts.map(account => account.accountId) } },
+      });
+      for (const account of metadata.accounts) {
+        const { accountId, ...details } = account;
+        await tx.bankAccount.upsert({
+          where: { bankConnectionId_accountId: { bankConnectionId: connection.id, accountId } },
+          create: { bankConnectionId: connection.id, accountId, ...details },
+          update: details,
+        });
+      }
+      return true;
+    });
   }
   async delete(ownerUid: string, status: PlaidConnectionState, expectedToken: string) {
     return (await this.db.plaidConnection.deleteMany({ where: { ownerUid, status, encryptedToken: expectedToken } })).count === 1;
@@ -42,9 +95,9 @@ export class PrismaConnectionStore implements ConnectionStore {
 
 export interface PlaidGateway {
   createLink(ownerUid: string): Promise<{ linkToken: string; expiration: string }>;
-  publicTokenBelongsToLink(linkToken: string, publicToken: string): Promise<boolean>;
-  exchange(publicToken: string): Promise<{ accessToken: string }>;
-  accounts(accessToken: string, liveBalance: boolean): Promise<Plaid.AccountBase[]>;
+  linkInstitution(linkToken: string, publicToken: string): Promise<{ institutionId: string | null; institutionName: string | null } | null>;
+  exchange(publicToken: string): Promise<{ accessToken: string; itemId: string }>;
+  accounts(accessToken: string, liveBalance: boolean): Promise<{ itemId: string; institutionId: string | null; institutionName: string | null; accounts: Plaid.AccountBase[] }>;
   remove(accessToken: string): Promise<void>;
 }
 
@@ -63,21 +116,30 @@ export class SandboxPlaidGateway implements PlaidGateway {
     });
     return { linkToken: result.link_token, expiration: result.expiration };
   }
-  async publicTokenBelongsToLink(linkToken: string, publicToken: string) {
+  async linkInstitution(linkToken: string, publicToken: string) {
     const result = await this.client.link.getToken({ link_token: linkToken });
-    return (result.link_sessions ?? []).some(session =>
-      session.on_success?.public_token === publicToken ||
-      session.results?.item_add_results.some(item => item.public_token === publicToken));
+    for (const session of result.link_sessions ?? []) {
+      const item = session.results?.item_add_results?.find(entry => entry.public_token === publicToken);
+      if (item) return { institutionId: item.institution?.institution_id ?? null, institutionName: item.institution?.name ?? null };
+      if (session.on_success?.public_token === publicToken) {
+        const institution = session.on_success.metadata?.institution;
+        return { institutionId: institution?.institution_id ?? null, institutionName: institution?.name ?? null };
+      }
+    }
+    return null;
   }
   async exchange(publicToken: string) {
     const result = await this.client.item.exchangePublicToken({ public_token: publicToken });
-    return { accessToken: result.access_token };
+    return { accessToken: result.access_token, itemId: result.item_id };
   }
   async accounts(accessToken: string, liveBalance: boolean) {
     const result = liveBalance
       ? await this.client.accounts.getBalance({ access_token: accessToken })
       : await this.client.accounts.get({ access_token: accessToken });
-    return result.accounts;
+    return {
+      itemId: result.item.item_id, institutionId: result.item.institution_id ?? null,
+      institutionName: result.item.institution_name ?? null, accounts: result.accounts,
+    };
   }
   async remove(accessToken: string) {
     try {
@@ -90,9 +152,13 @@ export class SandboxPlaidGateway implements PlaidGateway {
   }
 }
 
+function safeMask(mask: string | null) {
+  return mask && /^[A-Za-z0-9]{2,4}$/.test(mask) ? mask : null;
+}
+
 function accountView(account: Plaid.AccountBase) {
   return {
-    accountId: account.account_id, name: account.name, mask: account.mask,
+    accountId: account.account_id, name: account.name, mask: safeMask(account.mask),
     type: account.type, subtype: account.subtype,
     balances: {
       available: account.balances.available, current: account.balances.current,
@@ -121,7 +187,8 @@ export class PlaidService {
     if (!connection) throw new PlaidNotFoundError('Link session not found');
     if (connection.status !== 'LINKING') throw new PlaidConflictError('Connection is not awaiting exchange');
     const linkToken = decryptPlaidToken(connection.encryptedToken, ownerUid);
-    if (!await this.gateway.publicTokenBelongsToLink(linkToken, publicToken)) {
+    const institution = await this.gateway.linkInstitution(linkToken, publicToken);
+    if (!institution) {
       throw new PlaidInvalidTokenError('Public token does not belong to this Link session');
     }
     if (!await this.store.transition(ownerUid, 'LINKING', 'EXCHANGING', connection.encryptedToken)) throw new PlaidConflictError('Link session is no longer available');
@@ -131,7 +198,8 @@ export class PlaidService {
     let encryptedAccessToken: string | undefined;
     try {
       encryptedAccessToken = encryptPlaidToken(result.accessToken, ownerUid);
-      if (!await this.store.transition(ownerUid, 'EXCHANGING', 'ACTIVE', connection.encryptedToken, encryptedAccessToken)) {
+      if (!result.itemId) throw new Error('Plaid did not return an Item identifier');
+      if (!await this.store.transition(ownerUid, 'EXCHANGING', 'ACTIVE', connection.encryptedToken, encryptedAccessToken, { itemId: result.itemId, ...institution })) {
         throw new Error('Plaid connection state changed during exchange');
       }
     } catch (error) {
@@ -144,6 +212,8 @@ export class PlaidService {
       }
       throw error;
     }
+    // Keep an active encrypted token if metadata retrieval fails; a later accounts request can retry.
+    await this.accounts(ownerUid, false);
   }
 
   async accounts(ownerUid: string, liveBalance: boolean) {
@@ -152,7 +222,19 @@ export class PlaidService {
     if (connection.status !== 'ACTIVE') throw new PlaidConflictError('Connection is not active');
     const token = decryptPlaidToken(connection.encryptedToken, ownerUid);
     if (!token.startsWith('access-sandbox-')) throw new Error('Invalid stored Sandbox token');
-    return (await this.gateway.accounts(token, liveBalance)).map(accountView);
+    const result = await this.gateway.accounts(token, liveBalance);
+    if (!result.itemId) throw new Error('Plaid did not return an Item identifier');
+    const metadata: BankMetadata = {
+      itemId: result.itemId, institutionId: result.institutionId, institutionName: result.institutionName,
+      accounts: result.accounts.map(account => ({
+        accountId: account.account_id, displayName: account.name, mask: safeMask(account.mask),
+        type: account.type, subtype: account.subtype,
+      })),
+    };
+    if (!await this.store.syncMetadata(ownerUid, connection.encryptedToken, metadata)) {
+      throw new PlaidConflictError('Connection state changed');
+    }
+    return result.accounts.map(accountView);
   }
 
   async disconnect(ownerUid: string) {

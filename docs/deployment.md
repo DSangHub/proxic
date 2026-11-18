@@ -23,5 +23,7 @@ The backend always connects to Plaid's Sandbox host and rejects non-Sandbox toke
 
 If a disconnect fails, retry the same endpoint; a `DISCONNECTING` connection remains inaccessible until Plaid confirms removal (or reports the Sandbox token is invalid). Do not change Plaid client credentials while connections exist. If an exchange has an ambiguous failure or the server crashes during exchange, the connection can remain `EXCHANGING`: do not blindly retry the one-time token or delete the row. Contact an operator to reconcile and remove the Item in the Plaid Sandbox dashboard, then remove the affected record. No financial transactions are performed.
 
+The bank metadata migration preserves existing encrypted Plaid connections and backfills their UID and status; Item, institution, and account details are filled on the next successful accounts or balance request. New links populate metadata after exchange. If that lookup fails, the connection stays active and encrypted; retry an accounts request to finish synchronization. Removing a connection also removes its account metadata.
+
 ## GitHub
 CI builds and type-checks the monorepo. Add a separate Azure deployment workflow only after creating the Function App and configuring GitHub/Azure deployment credentials.
