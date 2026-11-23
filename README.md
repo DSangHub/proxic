@@ -48,5 +48,7 @@ Deploy `services/functions` as the Function App package. Configure required sett
 
 For the forwarding trust boundary, quarantine workflow, and deployment prerequisites, see [bill forwarding](docs/bill-forwarding.md).
 
+For deterministic payment-policy evaluation and approval semantics, see [payment policy](docs/payment-policy.md).
+
 ## Safety model
 AI produces a `ProposedAction`. A deterministic policy classifies the action, and payment proposals always require approval. Approving a bill records a decision only; it does not authorize or execute a financial transaction. Manual ingestion accepts only a small allowlist of structured fields and never stores raw emails, attachments, full account or card numbers, CVVs, or credentials. Forwarded email and attachments are not accepted yet; a future adapter must authenticate the forwarding channel and resolve the owner through a trusted alias, never through sender-supplied data.

@@ -45,6 +45,7 @@ model Bill {
   decidedAt        DateTime?
   submissions      BillSubmission[]
   approvals        Approval[]
+  paymentDecisions PaymentDecision[]
   auditEvents      AuditEvent[]
 
   @@unique([ownerUid, fingerprint])
@@ -141,8 +142,77 @@ model Approval {
   proposedAction Json?
   createdAt      DateTime  @default(now())
   decidedAt      DateTime?
+  paymentDecisionId String?
+  approvalTokenHash String? @unique
+  billSnapshotHash String?
+  amountCents    Int?
+  currency       String?
+  merchantName   String?
+  accountLast4   String?
+  bankConnectionId String?
+  expiresAt      DateTime?
+  approvedAt     DateTime?
+  rejectedAt     DateTime?
+  cancelledAt    DateTime?
+  updatedAt      DateTime @default(now())
+  paymentDecision PaymentDecision? @relation(fields: [paymentDecisionId], references: [id], onDelete: Restrict)
 
   @@index([ownerUid, billId, status])
+  @@index([ownerUid, status, expiresAt])
+}
+
+model PaymentPolicy {
+  id String @id @default(uuid())
+  userId String
+  name String
+  merchantName String
+  merchantFingerprint String
+  accountLast4 String?
+  mode String
+  maximumAmountCents Int?
+  minimumAmountCents Int?
+  currency String
+  allowedBankConnectionId String?
+  typicalAmountCents Int?
+  variancePercent Float?
+  requireApprovalAboveCents Int?
+  requireApprovalForFirstPayment Boolean @default(true)
+  requireApprovalForAmountChange Boolean @default(true)
+  requireApprovalForDueDateChange Boolean @default(true)
+  active Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  decisions PaymentDecision[]
+
+  @@index([userId, active])
+  @@unique([userId, merchantFingerprint, accountLast4])
+}
+
+model PaymentDecision {
+  id String @id @default(uuid())
+  userId String
+  billId String
+  policyId String?
+  decision String
+  riskLevel Int
+  reasons Json
+  amountCents Int?
+  currency String?
+  merchantName String?
+  accountLast4 String?
+  bankConnectionId String?
+  policySnapshot Json
+  billSnapshot Json
+  billSnapshotHash String
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  bill Bill @relation(fields: [billId, userId], references: [id, ownerUid], onDelete: Restrict)
+  policy PaymentPolicy? @relation(fields: [policyId], references: [id], onDelete: SetNull)
+  approvals Approval[]
+
+  @@index([userId, billId, createdAt])
+  @@index([userId, policyId, createdAt])
 }
 
 model AuditEvent {
