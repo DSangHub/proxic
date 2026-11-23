@@ -1,31 +1,24 @@
-# Proxic
+# Proxic Task 5 Azure Functions implementation
 
-**Proxy Choice: assign an AI proxy to the life-admin work you don't want to do.**
+Drop-in implementation for Payment Policy + Approval Engine using Azure Functions Node.js v4, Firebase Admin token verification, Prisma/PostgreSQL, deterministic policy evaluation, snapshot-bound approvals, serializable transactions, and audit events.
 
-Starter MVP monorepo for `DSangHub/proxic`.
+## Merge steps
+1. Copy `src/*` into `services/functions/src/`.
+2. Merge `prisma/schema.task5.prisma` into the existing Prisma schema, then add relations to your existing `Bill`, `BankConnection`, and `AuditEvent` models as required by your repo.
+3. Add package dependencies from `package.json` to the existing Functions package.
+4. Run Prisma format, migration, generate, typecheck, tests, and build.
 
-## MVP
-- Task Proxy
-- Appointment Proxy
-- Bill Proxy (proposal/approval only; no real payment execution in starter)
-- Approval and risk policy layer
-- Next.js web dashboard
-- Azure Functions API
+## Assumptions to adapt
+Existing Prisma models are named `Bill`, `BankConnection`, and `AuditEvent`, and contain the fields referenced in `policy-service.ts`. If Task 2 or Task 3 used different names, map those queries accordingly.
 
-## Local development
-1. Copy `.env.example` to `.env.local` and add development secrets.
-2. Install pnpm, Node.js, and Azure Functions Core Tools.
-3. Run `pnpm install`.
-4. Run `pnpm dev` for the web app.
-5. In another terminal run `pnpm --filter @proxic/functions dev` for Azure Functions.
+## Routes
+- `GET|POST /api/payment-policies`
+- `GET|PATCH|DELETE /api/payment-policies/:id`
+- `POST /api/bills/:id/evaluate-policy`
+- `GET /api/approvals`
+- `GET /api/approvals/:id`
+- `POST /api/approvals/:id/approve`
+- `POST /api/approvals/:id/reject`
+- `POST /api/approvals/:id/cancel`
 
-The web app defaults to `http://localhost:7071/api` for its backend.
-
-## Vercel
-Import the Git repository and set the Vercel project's Root Directory to `apps/web`. Add `NEXT_PUBLIC_API_URL` pointing to the deployed Azure Function App.
-
-## Azure Functions
-Deploy `services/functions` as the Function App package. Configure required settings in Azure rather than committing secrets.
-
-## Safety model
-AI produces a `ProposedAction`. A deterministic policy classifies the action, and sensitive actions remain `awaiting_approval`. This starter intentionally contains no bank-transfer or payment execution code.
+No payment provider is called. `APPROVED` means authorized and waiting for a future executor, not paid.

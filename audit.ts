@@ -1,0 +1,1 @@
+export async function audit(tx:any,input:{userId:string;action:string;resource:string;metadata?:Record<string,unknown>}){await tx.auditEvent.create({data:{actor:input.userId,action:input.action,resource:input.resource,metadata:input.metadata??{}}});}

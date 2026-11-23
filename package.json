@@ -1,1 +1,9 @@
-{"name":"proxic","private":true,"packageManager":"pnpm@10.18.3","scripts":{"dev":"turbo dev","build":"turbo build","typecheck":"turbo typecheck"},"devDependencies":{"turbo":"^2.5.8","typescript":"^5.7.0"}}
+{
+  "name": "@proxic/task5-payment-policy-functions",
+  "private": true,
+  "type": "module",
+  "main": "dist/src/index.js",
+  "scripts": {"build":"tsc","typecheck":"tsc --noEmit","test":"vitest run"},
+  "dependencies": {"@azure/functions":"^4.7.0","@prisma/client":"^6.19.0","firebase-admin":"^13.5.0","zod":"^4.1.0"},
+  "devDependencies": {"@types/node":"^22.0.0","prisma":"^6.19.0","typescript":"^5.9.0","vitest":"^4.0.0"}
+}
