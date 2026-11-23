@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { Prisma, PrismaClient, type PaymentPolicy } from '@prisma/client';
+import { getPrismaClient } from './prisma.js';
 
 export type PaymentMode = 'NOTIFY_ONLY' | 'ALWAYS_ASK' | 'AUTO_APPROVE_ELIGIBLE' | 'BLOCKED';
 export type PaymentDecisionName = 'NOTIFY_ONLY' | 'APPROVAL_REQUIRED' | 'ELIGIBLE_FOR_FUTURE_AUTOPAY' | 'BLOCKED' | 'MANUAL_REVIEW';
@@ -539,4 +540,4 @@ export class PaymentPolicyStore {
 }
 
 let store: PaymentPolicyStore | undefined;
-export function getPaymentPolicyStore() { return store ??= new PaymentPolicyStore(new PrismaClient()); }
+export function getPaymentPolicyStore() { return store ??= new PaymentPolicyStore(getPrismaClient()); }

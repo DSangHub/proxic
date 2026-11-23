@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { Prisma, PrismaClient } from '@prisma/client';
 import { InvalidBillError, parseBillInput, type BillInput } from './bill-input.js';
 import { propose } from './propose.js';
+import { getPrismaClient } from './prisma.js';
 
 const domain = 'in.proxic.app';
 const aliasPattern = /^b\.([A-Za-z0-9_-]{43})@in\.proxic\.app$/;
@@ -204,4 +205,4 @@ export class ForwardingStore {
 }
 
 let store: ForwardingStore | undefined;
-export function getForwardingStore() { return store ??= new ForwardingStore(new PrismaClient()); }
+export function getForwardingStore() { return store ??= new ForwardingStore(getPrismaClient()); }

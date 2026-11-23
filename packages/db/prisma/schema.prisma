@@ -27,20 +27,20 @@ model Task {
 }
 
 model Bill {
-  id               String           @id @default(uuid())
+  id               String            @id @default(uuid())
   ownerUid         String
   merchant         String
   amountMinor      Int
   currency         String
-  dueDate          DateTime         @db.Date
+  dueDate          DateTime          @db.Date
   accountLastFour  String?
   source           BillSource
-  status           BillStatus       @default(AWAITING_APPROVAL)
+  status           BillStatus        @default(AWAITING_APPROVAL)
   riskLevel        Int
   approvalRequired Boolean
   fingerprint      String
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
   reviewedAt       DateTime?
   decidedAt        DateTime?
   submissions      BillSubmission[]
@@ -54,34 +54,34 @@ model Bill {
 }
 
 model BillSubmission {
-  id          String     @id @default(uuid())
-  billId      String?
-  ownerUid    String
-  source      BillSource
-  receivedAt  DateTime   @default(now())
-  processedAt DateTime?  @default(now())
-  sender      String?
-  subject     String?
-  processingStatus String @default("processed")
-  scanStatus  String @default("not_applicable")
-  attachments Json?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  bill        Bill?      @relation(fields: [billId, ownerUid], references: [id, ownerUid])
+  id               String     @id @default(uuid())
+  billId           String?
+  ownerUid         String
+  source           BillSource
+  receivedAt       DateTime   @default(now())
+  processedAt      DateTime?  @default(now())
+  sender           String?
+  subject          String?
+  processingStatus String     @default("processed")
+  scanStatus       String     @default("not_applicable")
+  attachments      Json?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  bill             Bill?      @relation(fields: [billId, ownerUid], references: [id, ownerUid])
 
   @@index([ownerUid, billId])
 }
 
 model ForwardingAlias {
-  id        String    @id @default(uuid())
-  ownerUid  String
-  aliasHash String    @unique
+  id             String    @id @default(uuid())
+  ownerUid       String
+  aliasHash      String    @unique
   encryptedToken String?
-  purpose   String    @default("bill")
-  active    Boolean   @default(true)
-  createdAt DateTime  @default(now())
-  rotatedAt DateTime?
-  revokedAt DateTime?
+  purpose        String    @default("bill")
+  active         Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  rotatedAt      DateTime?
+  revokedAt      DateTime?
 
   @@index([ownerUid, active])
 }
@@ -132,84 +132,84 @@ enum PlaidConnectionState {
 }
 
 model Approval {
-  id             String    @id @default(uuid())
-  taskId         String?
-  task           Task?     @relation(fields: [taskId], references: [id])
-  billId         String?
-  ownerUid       String?
-  bill           Bill?     @relation(fields: [billId, ownerUid], references: [id, ownerUid])
-  status         String    @default("pending")
-  proposedAction Json?
-  createdAt      DateTime  @default(now())
-  decidedAt      DateTime?
+  id                String           @id @default(uuid())
+  taskId            String?
+  task              Task?            @relation(fields: [taskId], references: [id])
+  billId            String?
+  ownerUid          String?
+  bill              Bill?            @relation(fields: [billId, ownerUid], references: [id, ownerUid])
+  status            String           @default("pending")
+  proposedAction    Json?
+  createdAt         DateTime         @default(now())
+  decidedAt         DateTime?
   paymentDecisionId String?
-  approvalTokenHash String? @unique
-  billSnapshotHash String?
-  amountCents    Int?
-  currency       String?
-  merchantName   String?
-  accountLast4   String?
-  bankConnectionId String?
-  expiresAt      DateTime?
-  approvedAt     DateTime?
-  rejectedAt     DateTime?
-  cancelledAt    DateTime?
-  updatedAt      DateTime @default(now())
-  paymentDecision PaymentDecision? @relation(fields: [paymentDecisionId], references: [id], onDelete: Restrict)
+  approvalTokenHash String?          @unique
+  billSnapshotHash  String?
+  amountCents       Int?
+  currency          String?
+  merchantName      String?
+  accountLast4      String?
+  bankConnectionId  String?
+  expiresAt         DateTime?
+  approvedAt        DateTime?
+  rejectedAt        DateTime?
+  cancelledAt       DateTime?
+  updatedAt         DateTime         @default(now())
+  paymentDecision   PaymentDecision? @relation(fields: [paymentDecisionId], references: [id], onDelete: Restrict)
 
   @@index([ownerUid, billId, status])
   @@index([ownerUid, status, expiresAt])
 }
 
 model PaymentPolicy {
-  id String @id @default(uuid())
-  userId String
-  name String
-  merchantName String
-  merchantFingerprint String
-  accountLast4 String?
-  mode String
-  maximumAmountCents Int?
-  minimumAmountCents Int?
-  currency String
-  allowedBankConnectionId String?
-  typicalAmountCents Int?
-  variancePercent Float?
-  requireApprovalAboveCents Int?
-  requireApprovalForFirstPayment Boolean @default(true)
-  requireApprovalForAmountChange Boolean @default(true)
-  requireApprovalForDueDateChange Boolean @default(true)
-  active Boolean @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  decisions PaymentDecision[]
+  id                              String            @id @default(uuid())
+  userId                          String
+  name                            String
+  merchantName                    String
+  merchantFingerprint             String
+  accountLast4                    String?
+  mode                            String
+  maximumAmountCents              Int?
+  minimumAmountCents              Int?
+  currency                        String
+  allowedBankConnectionId         String?
+  typicalAmountCents              Int?
+  variancePercent                 Float?
+  requireApprovalAboveCents       Int?
+  requireApprovalForFirstPayment  Boolean           @default(true)
+  requireApprovalForAmountChange  Boolean           @default(true)
+  requireApprovalForDueDateChange Boolean           @default(true)
+  active                          Boolean           @default(true)
+  createdAt                       DateTime          @default(now())
+  updatedAt                       DateTime          @updatedAt
+  decisions                       PaymentDecision[]
 
-  @@index([userId, active])
   @@unique([userId, merchantFingerprint, accountLast4])
+  @@index([userId, active])
 }
 
 model PaymentDecision {
-  id String @id @default(uuid())
-  userId String
-  billId String
-  policyId String?
-  decision String
-  riskLevel Int
-  reasons Json
-  amountCents Int?
-  currency String?
-  merchantName String?
-  accountLast4 String?
+  id               String         @id @default(uuid())
+  userId           String
+  billId           String
+  policyId         String?
+  decision         String
+  riskLevel        Int
+  reasons          Json
+  amountCents      Int?
+  currency         String?
+  merchantName     String?
+  accountLast4     String?
   bankConnectionId String?
-  policySnapshot Json
-  billSnapshot Json
+  policySnapshot   Json
+  billSnapshot     Json
   billSnapshotHash String
-  expiresAt DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  bill Bill @relation(fields: [billId, userId], references: [id, ownerUid], onDelete: Restrict)
-  policy PaymentPolicy? @relation(fields: [policyId], references: [id], onDelete: SetNull)
-  approvals Approval[]
+  expiresAt        DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  bill             Bill           @relation(fields: [billId, userId], references: [id, ownerUid], onDelete: Restrict)
+  policy           PaymentPolicy? @relation(fields: [policyId], references: [id], onDelete: SetNull)
+  approvals        Approval[]
 
   @@index([userId, billId, createdAt])
   @@index([userId, policyId, createdAt])

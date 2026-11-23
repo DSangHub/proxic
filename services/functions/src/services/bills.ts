@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient, type Bill } from '@prisma/client';
 import { parseBillInput, type BillInput } from './bill-input.js';
+import { getPrismaClient } from './prisma.js';
 import { propose } from './propose.js';
 
 export type BillView = Pick<Bill, 'id' | 'merchant' | 'amountMinor' | 'currency' | 'dueDate' |
@@ -116,6 +117,6 @@ export async function ingestManualBill(store: BillStore, ownerUid: string, raw: 
 
 let store: BillStore | undefined;
 export function getBillStore(): BillStore {
-  if (!store) store = new PrismaBillStore(new PrismaClient());
+  if (!store) store = new PrismaBillStore(getPrismaClient());
   return store;
 }

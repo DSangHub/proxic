@@ -1,6 +1,7 @@
 import { Prisma, PrismaClient, type PlaidConnectionState } from '@prisma/client';
 import { PlaidClient, PlaidEnvironment, PlaidError, type Plaid } from 'plaid';
 import { decryptPlaidToken, encryptPlaidToken } from './plaid-crypto.js';
+import { getPrismaClient } from './prisma.js';
 
 export class PlaidConflictError extends Error {}
 export class PlaidNotFoundError extends Error {}
@@ -331,6 +332,6 @@ export class PlaidService {
 
 let service: PlaidService | undefined;
 export function getPlaidService() {
-  if (!service) service = new PlaidService(new PrismaConnectionStore(new PrismaClient()), () => new SandboxPlaidGateway());
+  if (!service) service = new PlaidService(new PrismaConnectionStore(getPrismaClient()), () => new SandboxPlaidGateway());
   return service;
 }
