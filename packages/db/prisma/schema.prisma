@@ -54,12 +54,19 @@ model Bill {
 
 model BillSubmission {
   id          String     @id @default(uuid())
-  billId      String
+  billId      String?
   ownerUid    String
   source      BillSource
   receivedAt  DateTime   @default(now())
-  processedAt DateTime   @default(now())
-  bill        Bill       @relation(fields: [billId, ownerUid], references: [id, ownerUid])
+  processedAt DateTime?  @default(now())
+  sender      String?
+  subject     String?
+  processingStatus String @default("processed")
+  scanStatus  String @default("not_applicable")
+  attachments Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  bill        Bill?      @relation(fields: [billId, ownerUid], references: [id, ownerUid])
 
   @@index([ownerUid, billId])
 }
@@ -67,10 +74,15 @@ model BillSubmission {
 model ForwardingAlias {
   id        String    @id @default(uuid())
   ownerUid  String
-  alias     String    @unique
+  aliasHash String    @unique
+  encryptedToken String?
+  purpose   String    @default("bill")
   active    Boolean   @default(true)
   createdAt DateTime  @default(now())
+  rotatedAt DateTime?
   revokedAt DateTime?
+
+  @@index([ownerUid, active])
 }
 
 model PlaidConnection {

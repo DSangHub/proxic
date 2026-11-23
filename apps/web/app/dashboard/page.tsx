@@ -6,6 +6,7 @@ import type { Bill } from '@proxic/types';
 import { useAuth } from '../auth-provider';
 import { listBills } from '../../lib/api';
 import { BankConnection } from './bank-connection';
+import { BillForwarding } from './bill-forwarding';
 
 const items = [['Bill Proxy', 'Organize bill-related tasks and prepare actions for approval.'], ['Appointment Proxy', 'Turn scheduling requests into proposed calendar actions.'], ['Task Proxy', 'Capture reminders, deadlines and everyday admin tasks.']];
 
@@ -49,6 +50,7 @@ export default function Dashboard() {
   return <main><h1>Your Proxies</h1><p className="muted">Start with three narrow agents and one shared approval layer.</p>
     <div className="grid">{items.map(([name, description]) => <div className="card" key={name}><h2>{name}</h2><p>{description}</p></div>)}</div>
     <section><h2>Bills</h2>{loading ? <p>Loading sign-in...</p> : user ? <Bills key={user.uid} user={user}/> : <p>Sign in to see your bills.</p>}</section>
+    {user ? <BillForwarding key={user.uid} user={user}/> : <section><h2>Bill Forwarding</h2><p>{loading ? 'Loading sign-in...' : 'Sign in to manage bill forwarding.'}</p></section>}
     {user ? <BankConnection key={user.uid} user={user}/> : <section><h2>Bank Connections</h2><p>{loading ? 'Loading sign-in...' : 'Sign in to connect a Sandbox bank.'}</p></section>}
   </main>;
 }
